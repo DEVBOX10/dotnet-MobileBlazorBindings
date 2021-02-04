@@ -2,21 +2,17 @@
 // Licensed under the MIT license.
 
 using Android.Content.Res;
-using Java.Interop.Tools.JavaCallableWrappers;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Primitives;
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace Microsoft.MobileBlazorBindings.WebView.Android
 {
     /// <summary>
-    /// File provider that extracts the zipfile inside the assets and then uses a regular file provider to provide the contents.
+    /// File provider that extracts the ZIP file inside the assets and then uses a regular file provider to provide the contents.
     /// </summary>
     public sealed class AssetFileProvider : IFileProvider, IDisposable
     {
@@ -29,12 +25,12 @@ namespace Microsoft.MobileBlazorBindings.WebView.Android
         /// <summary>
         /// Initializes a new instance of the <see cref="AssetFileProvider"/> class.
         /// </summary>
-        /// <param name="assetManager">The android assets manager to get the zip file from.</param>
+        /// <param name="assetManager">The Android assets manager to get the zip file from.</param>
         /// <param name="contentRoot">The content root.</param>
         public AssetFileProvider(AssetManager assetManager, string contentRoot)
         {
             _assetManager = assetManager ?? throw new ArgumentNullException(nameof(assetManager));
-            _extractionPath = Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.MyDocuments), this.GetType().Name, contentRoot);
+            _extractionPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), GetType().Name, contentRoot);
             ExtractContents();
 
             // Create a physical file provider for the Extraction path.
@@ -66,9 +62,7 @@ namespace Microsoft.MobileBlazorBindings.WebView.Android
                 using var zipFile = new ZipArchive(asset);
                 foreach (var entry in zipFile.Entries)
                 {
-#pragma warning disable CA5389 // Do Not Add Archive Item's Path To The Target File System Path
                     var destination = new FileInfo(Path.Combine(_extractionPath, entry.FullName));
-#pragma warning restore CA5389 // Do Not Add Archive Item's Path To The Target File System Path
                     var directory = new DirectoryInfo(Path.GetDirectoryName(destination.FullName));
 
                     toRemove.Remove(destination.FullName);
@@ -98,10 +92,14 @@ namespace Microsoft.MobileBlazorBindings.WebView.Android
                         }
                     }
 
-                    using var outputStream = destination.OpenWrite();
-                    using var inputStream = entry.Open();
+                    if (!destination.FullName.EndsWith("/", StringComparison.Ordinal))
+                    {
+                        // When overwriting a file, ensure its contents are reset by specifying FileMode.Create
+                        using var outputStream = new FileStream(destination.FullName, FileMode.Create, FileAccess.Write, FileShare.None);
+                        using var inputStream = entry.Open();
 
-                    inputStream.CopyTo(outputStream);
+                        inputStream.CopyTo(outputStream);
+                    }
                 }
             }
 
