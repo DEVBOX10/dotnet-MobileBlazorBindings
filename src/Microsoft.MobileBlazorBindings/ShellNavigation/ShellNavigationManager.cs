@@ -3,6 +3,7 @@
 
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.MobileBlazorBindings.Elements.Handlers;
 using Microsoft.MobileBlazorBindings.ShellNavigation;
 using System;
@@ -38,6 +39,12 @@ namespace Microsoft.MobileBlazorBindings
                 var routes = page.GetCustomAttributes<RouteAttribute>();
                 foreach (var route in routes)
                 {
+                    if (route.Template == "/")
+                    {
+                        // This route can be used in Hybrid apps and should be ignored by Shell (because Shell doesn't support empty routes anyway)
+                        continue;
+                    }
+
                     if (page.IsSubclassOf(typeof(ComponentBase)))
                     {
                         var structuredRoute = new StructuredRoute(route.Template, page);
@@ -96,18 +103,49 @@ namespace Microsoft.MobileBlazorBindings
         {
             var container = new RootContainerHandler();
             var route = NavigationParameters[componentType];
-            var renderer = _services.GetRequiredService<MobileBlazorBindingsRenderer>();
 
-            await renderer.AddComponent(componentType, container, route.Parameters).ConfigureAwait(false);
+#pragma warning disable CA2000 // Dispose objects before losing scope. Renderer is disposed when page is closed.
+            var renderer = new MobileBlazorBindingsRenderer(_services, _services.GetRequiredService<ILoggerFactory>());
+#pragma warning restore CA2000 // Dispose objects before losing scope
+
+            var addComponentTask = renderer.AddComponent(componentType, container, route.Parameters);
+            var elementAddedTask = container.WaitForElementAsync();
+
+            await Task.WhenAny(addComponentTask, elementAddedTask).ConfigureAwait(false);
 
             if (container.Elements.Count != 1)
             {
                 throw new InvalidOperationException("The target component of a Shell navigation must have exactly one root element.");
             }
 
-            var page = container.Elements.FirstOrDefault() as XF.Page;
+            var page = container.Elements.FirstOrDefault() as XF.Page
+                ?? throw new InvalidOperationException("The target component of a Shell navigation must derive from the Page component.");
 
-            return page ?? throw new InvalidOperationException("The target component of a Shell navigation must derive from the Page component.");
+            DisposeRendererWhenPageIsClosed(renderer, page);
+
+            return page;
+        }
+
+        private void DisposeRendererWhenPageIsClosed(MobileBlazorBindingsRenderer renderer, XF.Page page)
+        {
+            // Unfortunately, XF does not expose any Destroyed event for elements.
+            // Therefore we subscribe to Navigated event, and consider page as destroyed 
+            // if it is not present in the navigation stack.
+            XF.Shell.Current.Navigated += DisposeWhenNavigatedAway;
+
+            void DisposeWhenNavigatedAway(object sender, XF.ShellNavigatedEventArgs args)
+            {
+                // We need to check all navigationStacks for all Shell items.
+                var currentPages = XF.Shell.Current.Items
+                    .SelectMany(i => i.Items)
+                    .SelectMany(i => i.Navigation.NavigationStack);
+
+                if (!currentPages.Contains(page))
+                {
+                    XF.Shell.Current.Navigated -= DisposeWhenNavigatedAway;
+                    renderer.Dispose();
+                }
+            }
         }
     }
 }
